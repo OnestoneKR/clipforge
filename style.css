@@ -199,3 +199,6 @@ input,textarea{-webkit-user-select:text;user-select:text}
 .dlg{position:fixed;inset:0;background:#000b;z-index:70;display:flex;align-items:center;justify-content:center;padding:16px}
 .dlg[hidden]{display:none}
 .dlg .box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px;width:420px;max-width:100%;max-height:90vh;overflow:auto}
+
+.clip.msel{outline:2px dashed #ffd24d;outline-offset:-3px}
+#tMulti.on{background:#ffd24d;color:#111;border-color:#ffd24d;font-weight:700}

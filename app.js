@@ -77,6 +77,7 @@ const bboxes = new Map();          // clipId -> 마지막 렌더 박스
 const missing = {};                // 불러온 프로젝트에서 없는 미디어 id -> 이름
 let hist = [], hi = -1;
 let selMedia = null;
+const multi = new Set(); let multiMode = false, batchSpeed = 1;
 const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const HAS_FILTER = (() => {
   if (/nofilter=1/.test(location.search)) return false;
@@ -165,7 +166,7 @@ function scheduleAudio() {
     const m = media.get(c.mediaId); if (!m || !m.abuf) continue;
     const end = c.start + c.dur; if (end <= t) continue;
     const stems = c.sepOn && m.sep ? [[m.sep.v, 'v'], [m.sep.m, 'm']] : [[m.abuf, 'o']];
-    const sync = (c.syncMs || 0) / 1000, sp = clamp(c.speed, 0.25, 4), loop = c.loop && c.type === 'audio';
+    const sync = (c.syncMs || 0) / 1000, sp = clamp(c.speed, 0.2, 10), loop = c.loop && c.type === 'audio';
     for (const [buf, k] of stems) {
       const tl = Math.max(c.start, t), pre = Math.max(0, c.start - t);
       let off = c.in + (tl - c.start - sync) * sp, extra = 0;
@@ -198,8 +199,13 @@ function syncMedia() {
     if (el.playbackRate !== rate) el.playbackRate = rate;
     if (near) { if (!el.paused) el.pause(); if (Math.abs(el.currentTime - c.in) > 0.05 && !el.seeking) el.currentTime = c.in; continue; }
     if (playing) {
-      if (Math.abs(el.currentTime - target) > 0.3 && !el.seeking) el.currentTime = target;
-      if (el.paused) el.play().catch(() => { });
+      if (rate > 4) {   // 4배 초과는 재생 대신 프레임마다 위치를 옮겨 보여준다 (모바일에서도 안정적)
+        if (!el.paused) el.pause();
+        if (!el.seeking && Math.abs(el.currentTime - target) > 0.03) el.currentTime = target;
+      } else {
+        if (Math.abs(el.currentTime - target) > 0.3 && !el.seeking) el.currentTime = target;
+        if (el.paused) el.play().catch(() => { });
+      }
     } else {
       if (!el.paused) el.pause();
       if (Math.abs(el.currentTime - target) > 0.02 && !el.seeking) el.currentTime = target;
@@ -491,6 +497,10 @@ function trimToEnd() {               // 끝까지: 잘라 둔 뒷부분을 원�
   c.dur = nd; commit(); buildInspector(); toast(nd >= full - 0.01 ? '끝까지 재생' : '뒤 클립까지만 복원했습니다 (일부)');
 }
 function deleteClip(ripple = false) {
+  if (multiMode && multi.size) {
+    const n = multi.size; for (const id of [...multi]) { const c = findClip(id); if (!c) continue; const tr = trackOf(c); tr.clips = tr.clips.filter(x => x !== c); }
+    multi.clear(); sel = null; pruneEls(); commit(); buildInspector(); return toast(`${n}개 삭제`);
+  }
   const c = selClip(); if (!c) return;
   const tr = trackOf(c); tr.clips = tr.clips.filter(x => x !== c);
   if (ripple) for (const o of tr.clips) if (o.start >= c.start) o.start = Math.max(0, o.start - c.dur);
@@ -866,7 +876,7 @@ function renderTimeline() {
       const m = media.get(c.mediaId), left = c.start * pps, w = Math.max(4, c.dur * pps);
       const bg = m && m.thumb && c.type !== 'audio' ? `<div class="bgimg" style="background-image:url(${m.thumb})"></div>` : '';
       const tags = [(c.mute || trackMutedFor(c)) && (c.type === 'video' || c.type === 'audio') ? '🔇' : '', c.speed !== 1 ? `${c.speed}x` : '', c.animIn.type !== 'none' || c.animOut.type !== 'none' ? '✦' : '', c.fx.length || c.filter.brightness !== 100 ? 'fx' : '', Object.keys(c.kf).some(k => c.kf[k].length) ? '◆' : ''].filter(Boolean).join(' ');
-      html += `<div class="clip t-${c.type} ${c.id === sel ? 'sel' : ''}" data-id="${c.id}" style="left:${left}px;width:${w}px">${bg}
+      html += `<div class="clip t-${c.type} ${c.id === sel && !multiMode ? 'sel' : ''} ${multi.has(c.id) ? 'msel' : ''}" data-id="${c.id}" style="left:${left}px;width:${w}px">${bg}
         ${c.transIn.type !== 'none' ? `<div class="tr" style="width:${c.transIn.dur * pps}px"></div>` : ''}
         <div class="hl"></div><div class="cl">${c.type === 'audio' ? '🎵 ' : c.type === 'text' ? 'T ' : ''}${esc(clipLabel(c))} <small style="opacity:.8">${tags}</small></div><div class="hr"></div></div>`;
     }
@@ -889,7 +899,7 @@ const esc = (s) => String(s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt
 const tlwrap = $('#tlwrap');
 let drag = null, delTarget = 'clip', pinch = null;
 const timeAtX = (cx) => (cx - tlwrap.getBoundingClientRect().left + tlwrap.scrollLeft - headW()) / pps;
-function markSel() { $$('.clip', tlwrap).forEach(x => x.classList.toggle('sel', x.dataset.id === sel)); }
+function markSel() { $$('.clip', tlwrap).forEach(x => { x.classList.toggle('sel', !multiMode && x.dataset.id === sel); x.classList.toggle('msel', multi.has(x.dataset.id)); }); }
 function snapPoint(v, c, thr) {
   if (!$('#snap').checked) return v;
   const pts = [0, t, ...allClips().filter(o => o !== c).flatMap(o => [o.start, o.start + o.dur])];
@@ -911,6 +921,7 @@ tlwrap.addEventListener('pointerdown', (e) => {
   const ce = e.target.closest('.clip');
   if (ce) {
     const c = findClip(ce.dataset.id), tr = trackOf(c);
+    if (multiMode || e.ctrlKey || e.metaKey || e.shiftKey) { if (!multiMode) setMulti(true); toggleMulti(c.id); return; }
     if (sel !== c.id) { sel = c.id; if (!inspTabsFor(c).includes(inspTab)) inspTab = inspTabsFor(c)[0]; buildInspector(); markSel(); }
     if (tr.locked) return;
     const mode = e.target.classList.contains('hl') ? 'trimL' : e.target.classList.contains('hr') ? 'trimR' : 'move';
@@ -1062,6 +1073,7 @@ const color = (label, get, set) => h('div', { class: 'row two' }, h('label', {},
 
 function buildInspector() {
   const box = $('#insp'); box.innerHTML = '';
+  if (multiMode) { box.append(batchPanel()); return; }
   const c = selClip();
   if (!c) {
     box.append(
@@ -1099,12 +1111,48 @@ function tabTransform(c) {
     h('div', { class: 'hint' }, `출력 ${project.w}×${project.h}px` + (bb && bb.w ? ` · 이 클립 표시 ${Math.round(bb.w)}×${Math.round(bb.h)}px` : '')),
   ];
 }
+const SPEED_PRESETS = [0.2, 1, 2, 5, 10];
+function rippleSpeed(c, v) {   // 배속을 바꾸고, 같은 트랙의 뒤쪽 클립을 길이 변화만큼 밀거나 당긴다
+  v = clamp(v, 0.2, 10); const tr = trackOf(c); if (!tr || !isSrcClip(c)) return;
+  const oldDur = c.dur, srcLen = oldDur * c.speed; c.speed = v; c.dur = Math.max(0.05, srcLen / v);
+  const delta = c.dur - oldDur;
+  if (Math.abs(delta) > 1e-9) for (const o of tr.clips) if (o !== c && o.start >= c.start + oldDur - 1e-6) o.start = Math.max(0, o.start + delta);
+}
+function speedPresetsRow(cur, apply) {
+  return h('div', { class: 'chips' }, SPEED_PRESETS.map(v => btn(v + '배', () => { apply(v); commit(); buildInspector(); }, 'chip' + (Math.abs(cur - v) < 0.01 ? ' on' : ''))));
+}
 function speedRow(c) {
-  return slider('속도', () => c.speed, v => {
-    const srcLen = c.dur * c.speed; c.speed = v; c.dur = srcLen / v; const m = media.get(c.mediaId), tr = trackOf(c);
-    if (m && (c.type === 'video' || c.type === 'audio') && !c.loop) c.dur = Math.min(c.dur, (m.dur - c.in) / v);
-    const next = tr.clips.filter(x => x !== c && x.start >= c.start).reduce((mn, x) => Math.min(mn, x.start), Infinity); c.dur = Math.min(c.dur, next - c.start);
-  }, 0.25, 4, 0.05, { num: true, pm: 0.25, unit: '배' });
+  return h('div', {}, slider('속도', () => c.speed, v => rippleSpeed(c, v), 0.2, 10, 0.05, { num: true, pm: 0.5, unit: '배' }), speedPresetsRow(c.speed, v => rippleSpeed(c, v)),
+    h('div', { class: 'hint' }, '뒤쪽 클립은 길이 변화만큼 자동으로 밀리거나 당겨집니다. 5배 초과는 화면이 프레임을 건너뛰며 보이고, 소리는 음높이가 함께 변합니다.'));
+}
+// ── 여러 클립 한꺼번에 편집 ──
+function setMulti(on) {
+  multiMode = on; if (!on) multi.clear(); $('#tMulti').classList.toggle('on', on);
+  markSel(); buildInspector(); if (on) toast('다중 선택: 클립을 탭해서 고르세요');
+}
+function toggleMulti(id) { multi.has(id) ? multi.delete(id) : multi.add(id); sel = id; markSel(); buildInspector(); }
+function selectAllClips() {
+  multi.clear(); allClips().filter(c => c.type === 'video' || c.type === 'audio').forEach(c => multi.add(c.id)); multiMode = true; $('#tMulti').classList.add('on');
+  markSel(); buildInspector(); toast(`비디오/오디오 클립 ${multi.size}개 선택`);
+}
+function batchSpeed_apply(v) {
+  const list = [...multi].map(findClip).filter(c => c && isSrcClip(c)).sort((a, b) => a.start - b.start);
+  for (const c of list) rippleSpeed(c, v);
+}
+function batchPanel() {
+  const cs = [...multi].map(findClip).filter(Boolean), src = cs.filter(isSrcClip), box = h('div', {});
+  box.append(h('div', { class: 'sec' }, `선택한 클립 ${cs.length}개`));
+  if (!cs.length) { box.append(h('div', { class: 'hint' }, '타임라인의 클립을 탭해서 고르세요. 다시 탭하면 선택이 해제됩니다.'), btn('전체 선택 (비디오/오디오)', selectAllClips), btn('다중 선택 끝내기', () => setMulti(false))); return box; }
+  const speeds = new Set(src.map(c => +c.speed.toFixed(2))); if (speeds.size === 1) batchSpeed = [...speeds][0];
+  box.append(h('div', { class: 'sec' }, '배속 한 번에 적용'),
+    slider('배속', () => batchSpeed, v => { batchSpeed = v; batchSpeed_apply(v); }, 0.2, 10, 0.05, { num: true, pm: 0.5, unit: '배' }),
+    speedPresetsRow(speeds.size === 1 ? batchSpeed : -1, v => { batchSpeed = v; batchSpeed_apply(v); }),
+    h('div', { class: 'hint' }, `비디오/오디오 ${src.length}개에 적용됩니다. 각 트랙에서 뒤쪽 클립은 길이 변화만큼 자동으로 밀리거나 당겨집니다.` + (speeds.size > 1 ? ' (지금은 클립마다 배속이 다릅니다)' : '')),
+    h('div', { class: 'sec' }, '소리'),
+    h('div', { class: 'chips' }, btn('🔇 모두 끄기', () => { src.forEach(c => c.mute = true); commit(); buildInspector(); }), btn('🔊 모두 켜기', () => { src.forEach(c => c.mute = false); commit(); buildInspector(); })),
+    h('div', { class: 'sec' }, '기타'),
+    h('div', { class: 'chips' }, btn('전체 선택', selectAllClips), btn('선택 해제', () => { multi.clear(); markSel(); buildInspector(); }), btn('🗑 선택 삭제', () => deleteClip(false)), btn('다중 선택 끝내기', () => setMulti(false))));
+  return box;
 }
 function moveOrder(c, dir) {
   const tr = trackOf(c), list = tr.clips.slice().sort((a, b) => a.start - b.start), i = list.indexOf(c), j = i + dir;
@@ -1605,7 +1653,7 @@ function init() {
   $('#projIn').onchange = async (e) => { const f = e.target.files[0]; if (f) { try { loadProject(JSON.parse(await f.text())); } catch { toast('프로젝트 파일이 올바르지 않습니다'); } } e.target.value = ''; };
   $('#btnNew').onclick = () => { if (confirm('새 프로젝트를 만들까요? (현재 편집 내용은 자동 저장본에서만 복구 가능)')) { project = newProject(); sel = null; t = 0; hist = []; hi = -1; pushHist(); syncTopbar(); resizeCanvas(); pruneEls(); refresh(); autosave(); } };
   $('#tSplit').onclick = () => splitClip(); $('#tDel').onclick = () => deleteClip(); $('#tRipple').onclick = () => deleteClip(true); $('#tDup').onclick = dupClip; $('#tFreeze').onclick = freezeFrame; $('#tMark').onclick = addMarker;
-  $('#btnClean').onclick = cleanUnused;
+  $('#btnClean').onclick = cleanUnused; $('#tMulti').onclick = () => setMulti(!multiMode); $('#tAll').onclick = selectAllClips;
   $('#tFromStart').onclick = trimToStart; $('#tFromHere').onclick = trimFromHere; $('#tToHere').onclick = trimToHere; $('#tToEnd').onclick = trimToEnd;
   document.addEventListener('pointerdown', (e) => { delTarget = e.target.closest('#mediaGrid') ? 'media' : 'clip'; }, true);
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => { });
