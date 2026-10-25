@@ -219,7 +219,8 @@ const idbDelSep = async (fp) => { try { (await idbP).transaction('sep', 'readwri
 const idbGetSep = async (fp) => { try { const db = await idbP; return await new Promise(res => { const q = db.transaction('sep').objectStore('sep').get(fp); q.onsuccess = () => res(q.result); q.onerror = () => res(null); }); } catch { return null; } };
 const idbAll = async () => { try { const db = await idbP; return await new Promise(res => { const q = db.transaction('media').objectStore('media').getAll(); q.onsuccess = () => res(q.result); q.onerror = () => res([]); }); } catch { return []; } };
 
-async function addMedia(file, { id, name, durOverride, persist = true } = {}) {
+let persistPref = (() => { try { return localStorage.getItem('clipforge:persist') === '1'; } catch { return false; } })();
+async function addMedia(file, { id, name, durOverride, persist = persistPref } = {}) {
   const type = file.type.startsWith('video') ? 'video' : file.type.startsWith('image') ? 'image' : file.type.startsWith('audio') ? 'audio' : null;
   if (!type) { toast('지원하지 않는 형식: ' + file.name); return null; }
   name = name || file.name;
@@ -279,9 +280,11 @@ async function grabThumb(el, dur) {
     return c.toDataURL('image/jpeg', 0.6);
   } catch { return ''; }
 }
-async function loadAudio(m) {
+const AUDIO_LIMIT = () => (IS_IOS ? 40e6 : 250e6);
+async function loadAudio(m, force = false) {
   if (m.type === 'image') return;
-  if (m.blob.size > (IS_IOS ? 90e6 : 250e6)) return;
+  if (!force && m.blob.size > AUDIO_LIMIT()) return;
+  if (m.blob.size > 400e6) return;
   try {
     const ac = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(2, 1, 44100);
     const ab = await m.blob.arrayBuffer();
@@ -326,9 +329,9 @@ function askRatio(hasVideo) {
     };
     draw();
     $('#dlgNote').textContent = empty ? '' : '※ 이미 편집 중인 프로젝트는 전체 화면 비율이 함께 바뀝니다.';
-    $('#noAudioRow').style.display = hasVideo ? '' : 'none'; $('#noAudio').checked = false; $('#autoAdd').checked = true;
+    $('#noAudioRow').style.display = hasVideo ? '' : 'none'; $('#noAudio').checked = false; $('#autoAdd').checked = true; $('#persistMedia').checked = persistPref;
     dlg.hidden = false;
-    const done = (ok) => { dlg.hidden = true; $('#ratioOk').onclick = $('#ratioCancel').onclick = null; resolve(ok ? { ...dlgState, noAudio: $('#noAudio').checked && hasVideo, autoAdd: $('#autoAdd').checked } : null); };
+    const done = (ok) => { dlg.hidden = true; $('#ratioOk').onclick = $('#ratioCancel').onclick = null; resolve(ok ? { ...dlgState, noAudio: $('#noAudio').checked && hasVideo, autoAdd: $('#autoAdd').checked, persist: $('#persistMedia').checked } : null); };
     $('#ratioOk').onclick = () => done(true); $('#ratioCancel').onclick = () => done(false);
   });
 }
@@ -340,7 +343,10 @@ async function importFiles(files) {
     opt = await askRatio(hasVideo); if (!opt) return;
     if (project.ratio !== opt.ratio) { project.ratio = opt.ratio; syncTopbar(); resizeCanvas(); }
   }
+  if (opt) { persistPref = opt.persist; try { localStorage.setItem('clipforge:persist', persistPref ? '1' : '0'); } catch { } }
+  let n = 0; const t0 = performance.now();
   for (const f of files) {
+    toast(`불러오는 중 ${++n}/${files.length} · ${f.name}`);
     const m = await addMedia(f); if (!m) continue;
     if (opt && (m.type === 'video' || m.type === 'image')) {
       m.fit = opt.fit === 'fill' ? 'fill' : 'fit'; m.bgBlur = opt.fit === 'blur'; m.muteOnAdd = opt.noAudio && m.type === 'video';
@@ -348,6 +354,7 @@ async function importFiles(files) {
     } else if (m.type === 'audio' && !opt) { /* 오디오는 목록에만 추가 */ }
   }
   if (opt) commit();
+  toast(`${files.length}개 불러오기 완료 (${((performance.now() - t0) / 1000).toFixed(1)}초)${persistPref ? '' : ' · 임시 사용 중 (앱을 닫으면 사라집니다)'}`);
 }
 function toggleMute() {
   const c = selClip(); if (!c || (c.type !== 'video' && c.type !== 'audio')) return toast('비디오/오디오 클립을 먼저 선택하세요');
@@ -1150,7 +1157,8 @@ function previewBuf(buf) {
 }
 function stemSection(c) {
   const m = media.get(c.mediaId), out = [h('div', { class: 'sec' }, '목소리 / 배경음 분리')];
-  if (!m || !m.abuf) return [...out, h('div', { class: 'hint' }, m && m.blob && m.blob.size > (IS_IOS ? 90e6 : 250e6) ? '파일이 커서 소리 분석을 건너뛰었습니다.' : '소리를 분석하는 중이거나 소리가 없는 파일입니다.')];
+  if (m && !m.abuf && m.blob && m.blob.size > AUDIO_LIMIT() && !m.analyzing) out.push(h('button', { class: 'wide', onclick: async (e) => { m.analyzing = true; e.target.textContent = '분석 중…'; e.target.disabled = true; await loadAudio(m, true); m.analyzing = false; buildInspector(); } }, '소리 분석하기 (파형·분리 사용)'));
+  if (!m || !m.abuf) return [...out, h('div', { class: 'hint' }, m && m.blob && m.blob.size > AUDIO_LIMIT() ? '파일이 커서 불러오는 속도를 위해 소리 분석(파형·분리)을 건너뛰었습니다. 필요하면 아래 버튼을 누르세요.' : '소리를 분석하는 중이거나 소리가 없는 파일입니다.')];
   const status = h('div', { class: 'hint' });
   if (!m.sep) {
     const b = h('button', { class: 'primary wide', onclick: () => runSeparation(m, c, b, status) }, '분리 실행 (이 기기에서 처리)');
