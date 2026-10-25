@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon" href="icon-180.png">
 <title>ClipForge 영상 편집기</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Do+Hyeon&family=Jua&family=Noto+Sans+KR:wght@400;700&display=swap">
-<link rel="stylesheet" href="style.css?v=6">
+<link rel="stylesheet" href="style.css?v=7">
 </head>
 <body>
 <header id="top">
@@ -130,8 +130,11 @@
 
 <section id="timeline">
   <div id="tlbar">
-    <button id="tKnife" title="칼 도구 (C)">🔪 칼</button>
     <button id="tSplit" title="분할 (S)">✂ 분할</button>
+    <button id="tFromStart" title="잘라 둔 앞부분을 되살려 처음부터 재생">⏮ 처음부터</button>
+    <button id="tFromHere" title="빨간 선부터 재생 (앞부분 제외)">⇥ 여기부터</button>
+    <button id="tToHere" title="빨간 선까지만 재생 (뒷부분 제외)">⇤ 여기까지</button>
+    <button id="tToEnd" title="잘라 둔 뒷부분을 되살려 끝까지 재생">⏭ 끝까지</button>
     <button id="tMute" title="선택한 클립의 소리 끄기/켜기">🔇 소리 끄기</button>
     <button id="tDel" title="삭제 (Delete)">🗑 삭제</button>
     <button id="tRipple" title="삭제 후 빈 공간 당기기 (Shift+Delete)">⟸ 리플삭제</button>
@@ -179,6 +182,6 @@
 <input type="file" id="audioIn" multiple accept="audio/*" hidden>
 <input type="file" id="srtIn" accept=".srt,text/plain" hidden>
 <input type="file" id="projIn" accept=".json,application/json" hidden>
-<script src="app.js?v=6"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>

@@ -444,6 +444,45 @@ function splitClip(c = targetClip(), at = t) {
   tr.clips.push(b); tr.clips.sort((x, y) => x.start - y.start);
   sel = b.id; commit(); buildInspector(); return b;
 }
+// ── 재생 구간 지정 (원본은 그대로, 보이는 구간만 바꿈) ──
+const isSrcClip = (c) => c.type === 'video' || c.type === 'audio';
+function shiftKf(c, d) { for (const k of Object.keys(c.kf || {})) c.kf[k] = c.kf[k].map(p => ({ t: p.t + d, v: p.v })); }
+function trimTarget() {
+  const c = targetClip(); if (!c) { toast('먼저 클립을 선택하세요'); return null; }
+  if (trackOf(c).locked) { toast('잠긴 트랙입니다'); return null; }
+  sel = c.id; return c;
+}
+function trimFromHere() {            // 여기부터: 빨간 선 앞부분은 재생하지 않음
+  const c = trimTarget(); if (!c) return;
+  if (t <= c.start + 0.05 || t >= c.start + c.dur - 0.1) return toast('빨간 선을 클립 안쪽에 두고 눌러 주세요');
+  const d = t - c.start; if (isSrcClip(c)) c.in += d * c.speed;
+  c.start = t; c.dur -= d; shiftKf(c, -d); commit(); buildInspector(); toast(`${fmt(isSrcClip(c) ? c.in : t)} 부터 재생`);
+}
+function trimToHere() {              // 여기까지: 빨간 선 뒷부분은 재생하지 않음
+  const c = trimTarget(); if (!c) return;
+  if (t <= c.start + 0.1 || t >= c.start + c.dur - 0.05) return toast('빨간 선을 클립 안쪽에 두고 눌러 주세요');
+  c.dur = t - c.start; commit(); buildInspector(); toast(`${fmt(t)} 까지만 재생`);
+}
+function trimToStart() {             // 처음부터: 잘라 둔 앞부분을 원래대로
+  const c = trimTarget(); if (!c) return;
+  if (!isSrcClip(c)) return toast('이 클립은 원본 구간이 없습니다');
+  if (c.in < 0.01) return toast('이미 처음부터 재생됩니다');
+  const tr = trackOf(c), prevEnd = tr.clips.filter(x => x !== c && x.start + x.dur <= c.start + 1e-6).reduce((m, x) => Math.max(m, x.start + x.dur), 0);
+  const ns = Math.max(prevEnd, c.start - c.in / c.speed), back = c.start - ns;
+  if (back < 0.01) return toast('앞 클립에 막혀 더 되돌릴 수 없습니다');
+  c.in = Math.max(0, c.in - back * c.speed); if (c.in < 0.01) c.in = 0;
+  c.start = ns; c.dur += back; shiftKf(c, back); commit(); buildInspector();
+  toast(c.in === 0 ? '처음부터 재생' : '앞 클립까지만 복원했습니다 (일부)');
+}
+function trimToEnd() {               // 끝까지: 잘라 둔 뒷부분을 원래대로
+  const c = trimTarget(); if (!c) return;
+  if (!isSrcClip(c)) return toast('이 클립은 원본 구간이 없습니다');
+  const m = media.get(c.mediaId); if (!m) return;
+  const tr = trackOf(c), next = tr.clips.filter(x => x !== c && x.start >= c.start + c.dur - 1e-6).reduce((mn, x) => Math.min(mn, x.start), Infinity);
+  const full = (m.dur - c.in) / c.speed, nd = Math.min(full, next - c.start);
+  if (nd <= c.dur + 0.01) return toast(full <= c.dur + 0.01 ? '이미 끝까지 재생됩니다' : '뒤 클립에 막혀 더 늘릴 수 없습니다');
+  c.dur = nd; commit(); buildInspector(); toast(nd >= full - 0.01 ? '끝까지 재생' : '뒤 클립까지만 복원했습니다 (일부)');
+}
 function deleteClip(ripple = false) {
   const c = selClip(); if (!c) return;
   const tr = trackOf(c); tr.clips = tr.clips.filter(x => x !== c);
@@ -841,10 +880,9 @@ const esc = (s) => String(s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt
 
 // ───────────── 타임라인 인터랙션 ─────────────
 const tlwrap = $('#tlwrap');
-let drag = null, knife = false, delTarget = 'clip', pinch = null;
+let drag = null, delTarget = 'clip', pinch = null;
 const timeAtX = (cx) => (cx - tlwrap.getBoundingClientRect().left + tlwrap.scrollLeft - headW()) / pps;
 function markSel() { $$('.clip', tlwrap).forEach(x => x.classList.toggle('sel', x.dataset.id === sel)); }
-function toggleKnife(v = !knife) { knife = v; $('#tKnife').classList.toggle('on', knife); tlwrap.style.cursor = knife ? 'crosshair' : ''; if (knife) toast('칼 모드 ON: 자를 위치를 한 번 클릭하면 자르고 자동으로 꺼집니다 (Esc로 취소)'); }
 function snapPoint(v, c, thr) {
   if (!$('#snap').checked) return v;
   const pts = [0, t, ...allClips().filter(o => o !== c).flatMap(o => [o.start, o.start + o.dur])];
@@ -866,7 +904,6 @@ tlwrap.addEventListener('pointerdown', (e) => {
   const ce = e.target.closest('.clip');
   if (ce) {
     const c = findClip(ce.dataset.id), tr = trackOf(c);
-    if (knife) { if (!tr.locked && splitClip(c, timeAtX(e.clientX))) toggleKnife(false); return; }
     if (sel !== c.id) { sel = c.id; if (!inspTabsFor(c).includes(inspTab)) inspTab = inspTabsFor(c)[0]; buildInspector(); markSel(); }
     if (tr.locked) return;
     const mode = e.target.classList.contains('hl') ? 'trimL' : e.target.classList.contains('hr') ? 'trimR' : 'move';
@@ -1027,7 +1064,7 @@ function buildInspector() {
       h('div', { class: 'sec' }, '전체 음량'),
       slider('영상 원본', () => project.videoVol, v => project.videoVol = v, 0, 200, 1, { num: true, pm: 10, unit: '%' }),
       slider('음악·음성', () => project.audioVol, v => project.audioVol = v, 0, 200, 1, { num: true, pm: 10, unit: '%' }),
-      h('div', { class: 'empty' }, '클립을 선택하면 속성을 편집할 수 있습니다.', h('br'), h('br'), '단축키: Space 재생 · S 분할 · C 칼 · Delete 삭제 · Ctrl+D 복제 · Ctrl+Z 실행취소 · M 마커 · ←/→ 프레임 이동 · +/− 확대')
+      h('div', { class: 'empty' }, '클립을 선택하면 속성을 편집할 수 있습니다.', h('br'), h('br'), '단축키: Space 재생 · S 분할 · Delete 삭제 · Ctrl+D 복제 · Ctrl+Z 실행취소 · M 마커 · ←/→ 프레임 이동 · +/− 확대')
     );
     return;
   }
@@ -1560,7 +1597,8 @@ function init() {
   $('#projIn').onchange = async (e) => { const f = e.target.files[0]; if (f) { try { loadProject(JSON.parse(await f.text())); } catch { toast('프로젝트 파일이 올바르지 않습니다'); } } e.target.value = ''; };
   $('#btnNew').onclick = () => { if (confirm('새 프로젝트를 만들까요? (현재 편집 내용은 자동 저장본에서만 복구 가능)')) { project = newProject(); sel = null; t = 0; hist = []; hi = -1; pushHist(); syncTopbar(); resizeCanvas(); pruneEls(); refresh(); autosave(); } };
   $('#tSplit').onclick = () => splitClip(); $('#tDel').onclick = () => deleteClip(); $('#tRipple').onclick = () => deleteClip(true); $('#tDup').onclick = dupClip; $('#tFreeze').onclick = freezeFrame; $('#tMark').onclick = addMarker;
-  $('#tKnife').onclick = () => toggleKnife(); $('#btnClean').onclick = cleanUnused;
+  $('#btnClean').onclick = cleanUnused;
+  $('#tFromStart').onclick = trimToStart; $('#tFromHere').onclick = trimFromHere; $('#tToHere').onclick = trimToHere; $('#tToEnd').onclick = trimToEnd;
   document.addEventListener('pointerdown', (e) => { delTarget = e.target.closest('#mediaGrid') ? 'media' : 'clip'; }, true);
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => { });
   $('#tAddV').onclick = () => addTrack('video'); $('#tAddA').onclick = () => addTrack('audio');
@@ -1575,8 +1613,6 @@ function init() {
     else if (ctrl && k === 'c') { const c = selClip(); if (c) clipboard = JSON.parse(JSON.stringify(c)); }
     else if (ctrl && k === 'v' && clipboard) { const b = JSON.parse(JSON.stringify(clipboard)); b.id = uid(); b.start = t; placeClip(b); sel = b.id; commit(); buildInspector(); }
     else if (k === 's' && !ctrl) splitClip();
-    else if (k === 'c' && !ctrl) toggleKnife();
-    else if (k === 'escape') toggleKnife(false);
     else if (k === 'delete' || k === 'backspace') { e.preventDefault(); if (delTarget === 'media' && selMedia) removeMedia(selMedia); else deleteClip(e.shiftKey); }
     else if (k === 'm') addMarker();
     else if (k === 'arrowleft') { pause(); seek(t - (e.shiftKey ? 1 : 1 / project.fps)); }
@@ -1598,4 +1634,4 @@ async function restoreSession() {
 }
 init();
 window.__cf = { get project() { return project; }, media, addMedia, addMediaToTimeline, addText, addShape, addSticker, splitClip, play, pause, seek, get t() { return t; }, startExport, commit, refresh, get sel() { return sel; }, set sel(v) { sel = v; }, mkClip, placeClip, defText };
-window.__cf.separateStems = separateStems; window.__cf.playNodesCount = () => playNodes.length; window.__cf.get = (k) => ({ knife, HAS_FILTER, IS_IOS })[k];
+window.__cf.separateStems = separateStems; window.__cf.playNodesCount = () => playNodes.length; window.__cf.get = (k) => ({ HAS_FILTER, IS_IOS })[k];
