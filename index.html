@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ClipForge">
+<meta name="theme-color" content="#121316">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<title>ClipForge 영상 편집기</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Do+Hyeon&family=Jua&family=Noto+Sans+KR:wght@400;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="top">
+  <div class="brand">✂ ClipForge</div>
+  <input id="pname" value="제목 없음" spellcheck="false">
+  <span class="sp"></span>
+  <label class="sm">비율
+    <select id="ratio">
+      <option value="original">원본</option><option>16:9</option><option>9:16</option><option>1:1</option>
+      <option>4:3</option><option>3:4</option><option>21:9</option>
+    </select>
+  </label>
+  <label class="sm">해상도
+    <select id="res"><option value="480">480p</option><option value="720" selected>720p</option><option value="1080">1080p</option></select>
+  </label>
+  <span id="sizeLbl" class="sm"></span>
+  <button id="btnUndo" title="실행 취소 (Ctrl+Z)">↶</button>
+  <button id="btnRedo" title="다시 실행 (Ctrl+Shift+Z)">↷</button>
+  <button id="btnSave">프로젝트 저장</button>
+  <button id="btnOpen">불러오기</button>
+  <button id="btnNew">새로 만들기</button>
+  <button id="btnPng">프레임 PNG</button>
+  <button id="btnExport" class="primary">내보내기 ⬇</button>
+</header>
+
+<main>
+  <aside id="left">
+    <div class="sheet-x">닫기 ✕</div>
+    <nav class="ltabs">
+      <button class="ltab on" data-p="media">미디어</button>
+      <button class="ltab" data-p="text">텍스트</button>
+      <button class="ltab" data-p="stk">스티커</button>
+      <button class="ltab" data-p="audio">오디오</button>
+      <button class="ltab" data-p="cap">자막</button>
+    </nav>
+    <div class="lpanel on" id="p-media">
+      <button id="btnImport" class="primary wide">+ 파일 가져오기 (영상·이미지·오디오)</button>
+      <div class="hint">파일을 여기로 끌어다 놓아도 됩니다. 항목을 타임라인으로 드래그하거나 + 를 누르세요.</div>
+      <div id="mediaGrid" class="grid"></div>
+      <button id="btnClean" class="wide">미사용 미디어 정리</button>
+      <div class="hint">미디어를 선택하고 Delete 키(또는 × 버튼)로 프로젝트에서 제거합니다. 기기의 원본 파일은 삭제되지 않습니다.</div>
+      <h4>배경 소재</h4>
+      <div id="bgGrid" class="grid small"></div>
+    </div>
+    <div class="lpanel" id="p-text">
+      <button id="btnAddText" class="primary wide">+ 기본 텍스트</button>
+      <div id="textPresets" class="grid"></div>
+    </div>
+    <div class="lpanel" id="p-stk">
+      <button id="btnStkUp" class="primary wide">+ 내 스티커 가져오기 (PNG 등 이미지)</button>
+      <h4>라벨 스티커</h4>
+      <div id="labelGrid" class="grid small" style="grid-template-columns:repeat(3,1fr)"></div>
+      <h4>도형 / 화살표 / 말풍선</h4>
+      <div id="shapeGrid" class="grid small"></div>
+      <h4>이모지 스티커</h4>
+      <div id="emojiCats" class="chips"></div>
+      <div id="emojiGrid" class="grid small"></div>
+    </div>
+    <div class="lpanel" id="p-audio">
+      <button id="btnRec" class="wide">🎙 음성 녹음 시작</button>
+      <div class="hint" id="recInfo">마이크 권한이 필요합니다. 녹음 후 재생 헤드 위치에 자동 추가됩니다.</div>
+      <h4>AI 음성 (텍스트 → 음성)</h4>
+      <select id="ttsProv" class="wide"><option value="local">AI 내장 모델 — 키 불필요 (한국어, 첫 사용 시 ~40MB)</option><option value="google">Google Cloud TTS — 월 무료 한도 (API 키 필요)</option><option value="azure">Microsoft Azure 음성 — 월 무료 한도 (키 필요)</option><option value="openai">OpenAI TTS (API 키 필요)</option><option value="eleven">ElevenLabs (API 키 필요)</option><option value="browser">브라우저 내장 (미리듣기 전용)</option></select>
+      <input id="ttsKey" type="password" class="wide" placeholder="API 키 (이 브라우저에만 저장)" autocomplete="off">
+      <input id="ttsRegion" type="text" class="wide" placeholder="Azure 지역 (예: koreacentral)" style="display:none">
+      <label class="sm" id="ttsToneRow" style="margin:6px 0;display:flex">톤 <select id="ttsTone" style="margin-left:6px"><option value="0.8">아주 낮게 (느려짐)</option><option value="0.9">낮게</option><option value="1" selected>기본</option><option value="1.15">높게</option><option value="1.3">아주 높게 (빨라짐)</option></select></label>
+      <select id="ttsVoiceSel" class="wide" style="display:none"></select>
+      <input id="ttsVoice" type="text" class="wide" placeholder="목소리">
+      <label class="sm">속도 <input id="ttsSpeed" type="range" min="0.5" max="2" step="0.1" value="1" style="width:120px"></label>
+      <textarea id="ttsText" rows="4" placeholder="읽을 문장을 입력하세요"></textarea>
+      <button id="btnTtsSample" class="wide">▶ 선택한 목소리로 샘플 듣기</button>
+      <button id="btnTts" class="primary wide">음성 생성 → 타임라인에 추가</button>
+      <button id="btnTtsSel" class="wide">선택한 텍스트 클립 읽기 (같은 시작 위치)</button>
+      <button id="btnTtsAll" class="wide">모든 텍스트/자막 클립 일괄 음성화</button>
+      <div class="hint" id="ttsInfo">API 키는 localStorage에 저장되어 이 브라우저 안에서만 사용되며, 요청은 해당 서비스로 직접 전송됩니다. 공용 PC에서는 사용을 피하세요.</div>
+      <h4>효과음 (자체 합성)</h4>
+      <div id="sfxGrid" class="grid small"></div>
+      <button id="btnImportAudio" class="wide">+ 오디오 파일 가져오기</button>
+    </div>
+    <div class="lpanel" id="p-cap">
+      <h4>줄 단위 자막 일괄 추가</h4>
+      <textarea id="capText" rows="6" placeholder="한 줄에 한 자막씩 입력&#10;재생 헤드 위치부터 순서대로 배치됩니다"></textarea>
+      <label class="sm">줄당 길이(초) <input id="capDur" type="number" value="2" min="0.5" step="0.5" style="width:60px"></label>
+      <button id="btnCapAdd" class="primary wide">자막 트랙에 추가</button>
+      <h4>SRT 자막 가져오기</h4>
+      <button id="btnSrt" class="wide">SRT 파일 선택</button>
+      <button id="btnSrtOut" class="wide">현재 자막 SRT로 내보내기</button>
+    </div>
+  </aside>
+
+  <section id="center">
+    <div id="stage">
+      <div id="cvwrap">
+        <canvas id="cv" width="1280" height="720"></canvas>
+        <div id="sbox"><div class="hs"></div><div class="hrot"></div></div>
+      </div>
+    </div>
+    <div id="transport">
+      <button id="bStart" title="처음으로 (Home)">⏮</button>
+      <button id="bPrev" title="이전 프레임 (←)">◀︎</button>
+      <button id="bPlay" class="primary" title="재생/정지 (Space)">▶</button>
+      <button id="bNext" title="다음 프레임 (→)">▶︎</button>
+      <button id="bEnd" title="끝으로 (End)">⏭</button>
+      <span id="timeLbl">00:00.00 / 00:00.00</span>
+      <span class="sp"></span>
+      <label class="sm"><input type="checkbox" id="loop"> 반복</label>
+      <label class="sm">🔊 <input id="mvol" type="range" min="0" max="100" value="100" style="width:80px"></label>
+      <button id="bFull" title="전체화면">⛶</button>
+    </div>
+  </section>
+
+  <aside id="right"><div class="sheet-x">속성 닫기 ✕</div><div id="insp"></div></aside>
+</main>
+
+<section id="timeline">
+  <div id="tlbar">
+    <button id="tKnife" title="칼 도구 (C)">🔪 칼</button>
+    <button id="tSplit" title="분할 (S)">✂ 분할</button>
+    <button id="tDel" title="삭제 (Delete)">🗑 삭제</button>
+    <button id="tRipple" title="삭제 후 빈 공간 당기기 (Shift+Delete)">⟸ 리플삭제</button>
+    <button id="tDup" title="복제 (Ctrl+D)">⧉ 복제</button>
+    <button id="tFreeze" title="현재 프레임 정지 화면 삽입">❄ 프레임 정지</button>
+    <button id="tMark" title="마커 (M)">⚑ 마커</button>
+    <label class="sm"><input type="checkbox" id="snap" checked> 자석</label>
+    <span class="sp"></span>
+    <button id="tAddV">+ 비디오 트랙</button>
+    <button id="tAddA">+ 오디오 트랙</button>
+    <label class="sm">확대 <input id="zoom" type="range" min="10" max="300" value="70" style="width:120px"></label>
+  </div>
+  <div id="tlwrap"><div id="tlinner"></div></div>
+</section>
+
+<div id="overlay" hidden>
+  <div class="box">
+    <h3 id="ovTitle">내보내는 중…</h3>
+    <div class="bar"><div id="ovBar"></div></div>
+    <p id="ovInfo">탭을 전환하지 마세요. 실시간으로 인코딩됩니다.</p>
+    <button id="ovSave" class="primary" hidden>저장 / 공유</button> <button id="ovCancel">취소</button>
+  </div>
+</div>
+<nav id="mbar">
+  <button data-p="media">미디어</button><button data-p="text">텍스트</button><button data-p="stk">스티커</button>
+  <button data-p="audio">오디오</button><button data-p="cap">자막</button><button data-p="insp">속성</button>
+</nav>
+<div id="vpool"></div>
+<div id="toast"></div>
+
+<input type="file" id="fileIn" multiple accept="video/*,image/*,audio/*" hidden>
+<input type="file" id="stkIn" multiple accept="image/*" hidden>
+<input type="file" id="audioIn" multiple accept="audio/*" hidden>
+<input type="file" id="srtIn" accept=".srt,text/plain" hidden>
+<input type="file" id="projIn" accept=".json,application/json" hidden>
+<script src="app.js"></script>
+</body>
+</html>
