@@ -235,7 +235,7 @@ async function addMedia(file, { id, name, durOverride, persist = true } = {}) {
       const el = document.createElement(type); el.preload = 'metadata'; el.muted = true; el.src = url;
       await new Promise((r, j) => { el.onloadedmetadata = r; el.onerror = () => j(new Error('decode')); });
       m.dur = durOverride || (isFinite(el.duration) ? el.duration : 10);
-      if (type === 'video') { m.w = el.videoWidth; m.h = el.videoHeight; m.thumb = await grabThumb(el, m.dur); }
+      if (type === 'video') { m.w = el.videoWidth; m.h = el.videoHeight; m.thumb = await grabThumb(el, m.dur); if (m.thumb) { m.thumbImg = new Image(); m.thumbImg.src = m.thumb; } }
     }
   } catch (e) { toast('불러오지 못했습니다: ' + name); URL.revokeObjectURL(url); return null; }
   media.set(id, m); project.mediaNames[id] = name;
@@ -243,13 +243,39 @@ async function addMedia(file, { id, name, durOverride, persist = true } = {}) {
   renderMedia(); loadAudio(m);
   return m;
 }
+const frameCache = new Map();
+function snapFrame(c, src, m) {
+  const now = performance.now(); let fc = frameCache.get(c.id);
+  if (!fc) { fc = document.createElement('canvas'); fc._t = 0; fc._mt = 0; frameCache.set(c.id, fc); }
+  if (now - fc._t > (playing ? 700 : 150)) {
+    const w = Math.min(480, m.w), hh = Math.max(1, Math.round(w * m.h / m.w)); if (fc.width !== w || fc.height !== hh) { fc.width = w; fc.height = hh; }
+    try { fc.getContext('2d').drawImage(src, 0, 0, w, hh); fc._t = now; fc._mt = src.currentTime; } catch { }
+  }
+}
+function fallbackFrame(c, m) {
+  const fc = frameCache.get(c.id), want = c.in + (clamp(t, c.start, c.start + c.dur) - c.start) * c.speed;
+  if (fc && fc.width > 1 && Math.abs(fc._mt - want) < 2) return fc;
+  return m.thumbImg && m.thumbImg.complete && m.thumbImg.naturalWidth ? m.thumbImg : (fc && fc.width > 1 ? fc : null);
+}
+function prewarm() {   // 곧 나올 영상을 미리 첫 프레임으로 맞춰 둬서 '화면이 안 나오는' 현상을 줄인다
+  for (const tr of project.tracks) for (const c of tr.clips) {
+    if (c.type !== 'video') continue;
+    const d = c.start - t; if (d < -0.1 || d > 4 || (t >= c.start && t < c.start + c.dur)) continue;
+    const o = getEl(c); if (!o) continue; const el = o.el;
+    if (!el.paused) el.pause(); if (!el.seeking && Math.abs(el.currentTime - c.in) > 0.05) el.currentTime = c.in;
+  }
+}
+function gcEls() {      // iOS 는 동시에 많은 video 를 못 다루므로 멀리 있는 것은 해제
+  if (els.size <= 4) return;
+  for (const [id, o] of [...els]) { const c = findClip(id); if (!c || c.type !== 'video') continue; if (c.start - t > 12 || t - (c.start + c.dur) > 12) { o.el.pause(); o.el.removeAttribute('src'); o.el.load(); o.el.remove(); els.delete(id); } }
+}
+let frameNo = 0;
 async function grabThumb(el, dur) {
   try {
     el.currentTime = Math.min(0.5, dur / 2);
     await new Promise(r => { el.onseeked = r; setTimeout(r, 1500); });
-    const c = document.createElement('canvas'); c.width = 192; c.height = 108;
-    const g = c.getContext('2d'); const f = Math.max(c.width / el.videoWidth, c.height / el.videoHeight);
-    g.drawImage(el, (c.width - el.videoWidth * f) / 2, (c.height - el.videoHeight * f) / 2, el.videoWidth * f, el.videoHeight * f);
+    const c = document.createElement('canvas'); c.width = 192; c.height = Math.max(1, Math.round(192 * el.videoHeight / el.videoWidth));
+    const g = c.getContext('2d'); g.drawImage(el, 0, 0, c.width, c.height);
     return c.toDataURL('image/jpeg', 0.6);
   } catch { return ''; }
 }
@@ -633,11 +659,12 @@ function drawText(g, c, S, mod) {
 }
 function drawContent(g, c, W, H, S, mod) {
   if (c.type === 'video' || c.type === 'image') {
-    const src = sourceOf(c), m = media.get(c.mediaId); if (!src || !m.w) return [0, 0];
+    let src = sourceOf(c); const m = media.get(c.mediaId); if (!m || !m.w) return [0, 0];
+    if (c.type === 'video') { if (src && src.readyState >= 2 && !src.seeking) snapFrame(c, src, m); else src = fallbackFrame(c, m); }
     const f = (c.fit === 'fill' ? Math.max : Math.min)(W / m.w, H / m.h), dw = m.w * f, dh = m.h * f;
     g.save();
     if (c.mask !== 'none') g.clip(shapePath(c.mask, dw, dh));
-    try { g.drawImage(src, -dw / 2, -dh / 2, dw, dh); } catch { }
+    if (src) { try { g.drawImage(src, -dw / 2, -dh / 2, dw, dh); } catch { } }
     g.restore();
     return [dw, dh];
   }
@@ -749,13 +776,14 @@ function tick() {
     }
   }
   syncMedia(); drawFrame(); updateUI();
+  if (++frameNo % 15 === 0) { prewarm(); if (frameNo % 60 === 0) gcEls(); }
   requestAnimationFrame(tick);
 }
 function updateUI() {
   $('#timeLbl').textContent = `${fmt(t)} / ${fmt(total())}`;
-  const ph = $('.playhead'); if (ph) ph.style.left = (130 + t * pps) + 'px';
+  const HW = headW(), ph = $('.playhead'); if (ph) ph.style.left = (HW + t * pps) + 'px';
   const wrap = $('#tlwrap');
-  if (playing && !exporting) { const px = 130 + t * pps; if (px > wrap.scrollLeft + wrap.clientWidth - 40 || px < wrap.scrollLeft + 130) wrap.scrollLeft = px - 200; }
+  if (playing && !exporting) { const px = HW + t * pps; if (px > wrap.scrollLeft + wrap.clientWidth - 40 || px < wrap.scrollLeft + HW) wrap.scrollLeft = px - 200; }
   const sb = $('#sbox'), c = selClip(), bb = c && bboxes.get(c.id);
   const vis = c && bb && t >= c.start && t < c.start + c.dur && !exporting && bb.w > 0;
   if (vis) {
@@ -766,6 +794,7 @@ function updateUI() {
 }
 
 // ───────────── 타임라인 렌더 ─────────────
+const headW = () => { const c = document.querySelector('.corner'); return c && c.offsetWidth ? c.offsetWidth : 130; };
 function renderTimeline() {
   const wrap = $('#tlwrap'), inner = $('#tlinner');
   const lanePx = Math.max(total() + 12, wrap.clientWidth / pps) * pps + 100;
@@ -797,9 +826,9 @@ function renderTimeline() {
     }
     html += `</div></div>`;
   });
-  html += `<div class="playhead" style="left:${130 + t * pps}px"></div>`;
+  html += `<div class="playhead" style="left:${headW() + t * pps}px"></div>`;
   const sl = wrap.scrollLeft, st = wrap.scrollTop;
-  inner.style.width = (130 + lanePx) + 'px'; inner.innerHTML = html; wrap.scrollLeft = sl; wrap.scrollTop = st;
+  inner.style.width = (headW() + lanePx) + 'px'; inner.innerHTML = html; wrap.scrollLeft = sl; wrap.scrollTop = st;
   // 파형
   $$('.clip.t-audio, .clip.t-video', inner).forEach(el => {
     const c = findClip(el.dataset.id), m = media.get(c.mediaId); if (!m || !m.peaks) return;
@@ -813,7 +842,7 @@ const esc = (s) => String(s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt
 // ───────────── 타임라인 인터랙션 ─────────────
 const tlwrap = $('#tlwrap');
 let drag = null, knife = false, delTarget = 'clip', pinch = null;
-const timeAtX = (cx) => (cx - tlwrap.getBoundingClientRect().left + tlwrap.scrollLeft - 130) / pps;
+const timeAtX = (cx) => (cx - tlwrap.getBoundingClientRect().left + tlwrap.scrollLeft - headW()) / pps;
 function markSel() { $$('.clip', tlwrap).forEach(x => x.classList.toggle('sel', x.dataset.id === sel)); }
 function toggleKnife(v = !knife) { knife = v; $('#tKnife').classList.toggle('on', knife); tlwrap.style.cursor = knife ? 'crosshair' : ''; if (knife) toast('칼 모드 ON: 자를 위치를 한 번 클릭하면 자르고 자동으로 꺼집니다 (Esc로 취소)'); }
 function snapPoint(v, c, thr) {
@@ -833,7 +862,7 @@ tlwrap.addEventListener('pointerdown', (e) => {
   }
   if (e.target.closest('.marker')) return;
   const ru = e.target.closest('.ruler');
-  if (ru) { drag = { mode: 'scrub' }; try { ru.setPointerCapture(e.pointerId); } catch { } pause(); seek(timeAtX(e.clientX)); return; }
+  if (ru) { drag = { mode: 'scrub' }; lastPt = { x: e.clientX, y: e.clientY }; try { ru.setPointerCapture(e.pointerId); } catch { } pause(); seek(timeAtX(e.clientX)); return; }
   const ce = e.target.closest('.clip');
   if (ce) {
     const c = findClip(ce.dataset.id), tr = trackOf(c);
@@ -841,23 +870,26 @@ tlwrap.addEventListener('pointerdown', (e) => {
     if (sel !== c.id) { sel = c.id; if (!inspTabsFor(c).includes(inspTab)) inspTab = inspTabsFor(c)[0]; buildInspector(); markSel(); }
     if (tr.locked) return;
     const mode = e.target.classList.contains('hl') ? 'trimL' : e.target.classList.contains('hr') ? 'trimR' : 'move';
-    drag = { mode, c, tr, lastTr: tr, el: ce, sx: e.clientX, o: { start: c.start, dur: c.dur, in: c.in }, moved: false };
+    drag = { mode, c, tr, lastTr: tr, el: ce, sx: e.clientX, scroll0: tlwrap.scrollLeft, o: { start: c.start, dur: c.dur, in: c.in }, moved: false };
+    lastPt = { x: e.clientX, y: e.clientY };
     try { ce.setPointerCapture(e.pointerId); } catch { }
     return;
   }
-  if (e.target.closest('.lane')) { sel = null; buildInspector(); markSel(); pause(); seek(timeAtX(e.clientX)); if (e.pointerType !== 'touch') drag = { mode: 'scrub' }; }
+  if (e.target.closest('.lane')) { sel = null; buildInspector(); markSel(); pause(); seek(timeAtX(e.clientX)); if (e.pointerType !== 'touch') { drag = { mode: 'scrub' }; lastPt = { x: e.clientX, y: e.clientY }; } }
 });
 tlwrap.addEventListener('dblclick', (e) => { const mk = e.target.closest('.marker'); if (mk) { project.markers.splice(+mk.dataset.mi, 1); commit(); } });
-document.addEventListener('pointermove', (e) => {
+let lastPt = null, edgeRaf = 0;
+function applyDrag(cx, cy) {
   if (!drag) return;
-  if (drag.mode === 'scrub') { seek(timeAtX(e.clientX)); return; }
-  const { c, o } = drag, dx = (e.clientX - drag.sx) / pps, thr = 9 / pps, m = media.get(c.mediaId);
-  if (Math.abs(e.clientX - drag.sx) > 3) drag.moved = true; if (!drag.moved) return;
+  if (drag.mode === 'scrub') { seek(timeAtX(cx)); return; }
+  const { c, o } = drag, thr = 9 / pps, m = media.get(c.mediaId);
+  const sdx = tlwrap.scrollLeft - drag.scroll0, dx = ((cx - drag.sx) + sdx) / pps;
+  if (Math.abs(cx - drag.sx) > 3 || Math.abs(sdx) > 3) drag.moved = true; if (!drag.moved) return;
   const isSrc = c.type === 'video' || c.type === 'audio';
   if (drag.mode === 'move') {
     let ns = snapPoint(Math.max(0, o.start + dx), c, thr);
     let tr = drag.lastTr;
-    const row = $$('.track-row').find(r => { const b = r.getBoundingClientRect(); return e.clientY >= b.top && e.clientY < b.bottom; });
+    const row = $$('.track-row').find(r => { const b = r.getBoundingClientRect(); return cy >= b.top && cy < b.bottom; });
     if (row) { const cand = project.tracks[+row.dataset.ti]; if (cand && cand.kind === kindOf(c) && !cand.locked) tr = cand; }
     if (!trackFree(tr, ns, c.dur, c.id)) { if (trackFree(drag.lastTr, ns, c.dur, c.id)) tr = drag.lastTr; else return; }
     if (tr !== drag.lastTr) {
@@ -878,6 +910,27 @@ document.addEventListener('pointermove', (e) => {
     ne = clamp(ne, o.start + 0.1, maxE); c.dur = ne - o.start;
   }
   drag.el.style.left = c.start * pps + 'px'; drag.el.style.width = Math.max(4, c.dur * pps) + 'px';
+}
+function extendTimeline() {   // 오른쪽 끝에서 계속 끌면 타임라인을 자동으로 늘린다
+  const add = 400, inner = $('#tlinner');
+  $$('.lane,.ruler', inner).forEach(el => el.style.width = (parseFloat(el.style.width) + add) + 'px');
+  inner.style.width = (parseFloat(inner.style.width) + add) + 'px';
+}
+function edgeLoop() {
+  edgeRaf = 0; if (!drag || !lastPt) return;
+  const r = tlwrap.getBoundingClientRect(), lz = r.left + headW() + 44, rz = r.right - 56; let v = 0;
+  if (lastPt.x < lz) v = -Math.min(28, (lz - lastPt.x) / 4 + 3); else if (lastPt.x > rz) v = Math.min(28, (lastPt.x - rz) / 4 + 3);
+  if (v) {
+    if (v > 0 && tlwrap.scrollLeft >= tlwrap.scrollWidth - tlwrap.clientWidth - 2) extendTimeline();
+    const before = tlwrap.scrollLeft; tlwrap.scrollLeft = Math.max(0, before + v);
+    if (tlwrap.scrollLeft !== before) applyDrag(lastPt.x, lastPt.y);
+  }
+  edgeRaf = requestAnimationFrame(edgeLoop);
+}
+document.addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  lastPt = { x: e.clientX, y: e.clientY }; applyDrag(e.clientX, e.clientY);
+  if (!edgeRaf) edgeRaf = requestAnimationFrame(edgeLoop);
 });
 document.addEventListener('pointerup', () => {
   if (!drag) return;
