@@ -98,6 +98,7 @@ const trackOf = (c) => project.tracks.find(tr => tr.clips.includes(c));
 const total = () => allClips().reduce((m, c) => Math.max(m, c.start + c.dur), 0);
 const kindOf = (c) => c.type === 'audio' ? 'audio' : 'video';
 const selClip = () => sel ? findClip(sel) : null;
+const trackMutedFor = (c) => { const tr = trackOf(c); return !!(tr && tr.muted); };
 const clipLabel = (c) => c.text ? c.text.content.split('\n')[0] : c.type === 'shape' ? '도형' : (media.get(c.mediaId)?.name || '(미디어 없음)');
 
 // ───────────── 히스토리 / 저장 ─────────────
@@ -201,7 +202,7 @@ function syncMedia() {
       if (!el.paused) el.pause();
       if (Math.abs(el.currentTime - target) > 0.02 && !el.seeking) el.currentTime = target;
     }
-    if (!m.abuf) { const g = clipGain(c, tr, t); if (o.gain) o.gain.gain.value = g; else el.volume = clamp(g, 0, 1); }
+    if (!m.abuf) { const g = clipGain(c, tr, t); el.muted = g <= 0.001; if (o.gain) o.gain.gain.value = g; else el.volume = clamp(g, 0, 1); }
   }
 }
 function pauseAllEls() { for (const o of els.values()) if (!o.el.paused) o.el.pause(); }
@@ -264,9 +265,12 @@ async function loadAudio(m) {
   } catch { }
 }
 
+let mediaFilter = 'all';
 function renderMedia() {
   const g = $('#mediaGrid'); g.innerHTML = '';
+  $$('#mediaTabs button').forEach(b => b.classList.toggle('on', b.dataset.f === mediaFilter));
   for (const m of media.values()) {
+    if (mediaFilter !== 'all' && m.type !== mediaFilter) continue;
     const it = h('div', { class: 'mitem', draggable: true, title: m.name },
       h('div', { class: 'th', style: m.thumb ? `background-image:url(${m.thumb})` : '' }, m.thumb ? '' : (m.type === 'audio' ? '🎵' : '🖼')),
       h('div', { class: 'nm' }, m.name),
@@ -279,6 +283,47 @@ function renderMedia() {
     it.addEventListener('dblclick', () => addMediaToTimeline(m.id));
     g.append(it);
   }
+}
+const RATIO_LABELS = [['original', '원본'], ['16:9', '16:9 가로'], ['9:16', '9:16 세로(릴스·쇼츠)'], ['1:1', '1:1 정사각'], ['4:3', '4:3'], ['3:4', '3:4'], ['21:9', '21:9 와이드']];
+const FIT_LABELS = [['fill', '화면 채우기 (꽉 차게, 넘치는 부분은 잘림)'], ['fit', '전체 보기 (전체가 보이게, 여백 생김)'], ['blur', '전체 보기 + 블러 배경']];
+let dlgState = { ratio: '16:9', fit: 'fill' };
+function askRatio(hasVideo) {
+  return new Promise((resolve) => {
+    const dlg = $('#ratioDlg'), empty = !allClips().some(c => c.type === 'video' || c.type === 'image');
+    dlgState.ratio = empty ? 'original' : project.ratio;
+    const draw = () => {
+      const rc = $('#ratioChips'), fc = $('#fitChips'); rc.innerHTML = ''; fc.innerHTML = '';
+      for (const [v, n] of RATIO_LABELS) rc.append(h('button', { class: 'chip' + (dlgState.ratio === v ? ' on' : ''), onclick: () => { dlgState.ratio = v; draw(); } }, n));
+      for (const [v, n] of FIT_LABELS) fc.append(h('button', { class: 'chip' + (dlgState.fit === v ? ' on' : ''), onclick: () => { dlgState.fit = v; draw(); } }, n));
+    };
+    draw();
+    $('#dlgNote').textContent = empty ? '' : '※ 이미 편집 중인 프로젝트는 전체 화면 비율이 함께 바뀝니다.';
+    $('#noAudioRow').style.display = hasVideo ? '' : 'none'; $('#noAudio').checked = false; $('#autoAdd').checked = true;
+    dlg.hidden = false;
+    const done = (ok) => { dlg.hidden = true; $('#ratioOk').onclick = $('#ratioCancel').onclick = null; resolve(ok ? { ...dlgState, noAudio: $('#noAudio').checked && hasVideo, autoAdd: $('#autoAdd').checked } : null); };
+    $('#ratioOk').onclick = () => done(true); $('#ratioCancel').onclick = () => done(false);
+  });
+}
+async function importFiles(files) {
+  files = [...files]; if (!files.length) return;
+  const hasVisual = files.some(f => /^(video|image)\//.test(f.type)), hasVideo = files.some(f => /^video\//.test(f.type));
+  let opt = null;
+  if (hasVisual) {
+    opt = await askRatio(hasVideo); if (!opt) return;
+    if (project.ratio !== opt.ratio) { project.ratio = opt.ratio; syncTopbar(); resizeCanvas(); }
+  }
+  for (const f of files) {
+    const m = await addMedia(f); if (!m) continue;
+    if (opt && (m.type === 'video' || m.type === 'image')) {
+      m.fit = opt.fit === 'fill' ? 'fill' : 'fit'; m.bgBlur = opt.fit === 'blur'; m.muteOnAdd = opt.noAudio && m.type === 'video';
+      if (opt.autoAdd) addMediaToTimeline(m.id);
+    } else if (m.type === 'audio' && !opt) { /* 오디오는 목록에만 추가 */ }
+  }
+  if (opt) commit();
+}
+function toggleMute() {
+  const c = selClip(); if (!c || (c.type !== 'video' && c.type !== 'audio')) return toast('비디오/오디오 클립을 먼저 선택하세요');
+  c.mute = !c.mute; commit(); buildInspector(); toast(c.mute ? '이 클립의 소리를 껐습니다 (화면만 사용)' : '소리를 다시 켰습니다');
 }
 function cleanUnused() {
   const used = new Set(allClips().map(c => c.mediaId)), un = [...media.keys()].filter(id => !used.has(id));
@@ -311,6 +356,8 @@ function placeClip(c, { track = null, overlay = false } = {}) {
 function addMediaToTimeline(mid, { start = null, track = null } = {}) {
   const m = media.get(mid); if (!m) return;
   const c = mkClip(m.type, { mediaId: mid, dur: m.type === 'image' ? 5 : m.dur });
+  if (m.type === 'video' || m.type === 'image') { if (m.fit) c.fit = m.fit; if (m.bgBlur) c.bgBlur = true; }
+  if (m.muteOnAdd) c.mute = true;
   if (start == null) {
     if (m.type === 'audio') start = t;
     else { const main = project.tracks.filter(x => x.kind === 'video' && !x.locked).slice(-1)[0]; start = main && main.clips.length ? Math.max(...main.clips.map(o => o.start + o.dur)) : 0; if (main && !main.clips.length) track = track || main; }
@@ -741,7 +788,7 @@ function renderTimeline() {
     for (const c of tr.clips) {
       const m = media.get(c.mediaId), left = c.start * pps, w = Math.max(4, c.dur * pps);
       const bg = m && m.thumb && c.type !== 'audio' ? `<div class="bgimg" style="background-image:url(${m.thumb})"></div>` : '';
-      const tags = [c.speed !== 1 ? `${c.speed}x` : '', c.animIn.type !== 'none' || c.animOut.type !== 'none' ? '✦' : '', c.fx.length || c.filter.brightness !== 100 ? 'fx' : '', Object.keys(c.kf).some(k => c.kf[k].length) ? '◆' : ''].filter(Boolean).join(' ');
+      const tags = [(c.mute || trackMutedFor(c)) && (c.type === 'video' || c.type === 'audio') ? '🔇' : '', c.speed !== 1 ? `${c.speed}x` : '', c.animIn.type !== 'none' || c.animOut.type !== 'none' ? '✦' : '', c.fx.length || c.filter.brightness !== 100 ? 'fx' : '', Object.keys(c.kf).some(k => c.kf[k].length) ? '◆' : ''].filter(Boolean).join(' ');
       html += `<div class="clip t-${c.type} ${c.id === sel ? 'sel' : ''}" data-id="${c.id}" style="left:${left}px;width:${w}px">${bg}
         ${c.transIn.type !== 'none' ? `<div class="tr" style="width:${c.transIn.dur * pps}px"></div>` : ''}
         <div class="hl"></div><div class="cl">${c.type === 'audio' ? '🎵 ' : c.type === 'text' ? 'T ' : ''}${esc(clipLabel(c))} <small style="opacity:.8">${tags}</small></div><div class="hr"></div></div>`;
@@ -1087,11 +1134,15 @@ function tabAnim(c) {
 // ───────────── 좌측 패널 ─────────────
 function initPanels() {
   $$('.ltab').forEach(b => b.onclick = () => { $$('.ltab,.lpanel').forEach(x => x.classList.remove('on')); b.classList.add('on'); $('#p-' + b.dataset.p).classList.add('on'); });
-  $('#btnImport').onclick = () => $('#fileIn').click(); $('#btnImportAudio').onclick = () => $('#audioIn').click();
-  $('#fileIn').onchange = async (e) => { for (const f of e.target.files) await addMedia(f); e.target.value = ''; };
+  $('#btnImpVideo').onclick = () => $('#vidIn').click(); $('#btnImpPhoto').onclick = () => $('#imgIn').click(); $('#btnImportAudio').onclick = () => $('#audioIn').click();
+  $('#vidIn').onchange = async (e) => { const f = [...e.target.files]; e.target.value = ''; await importFiles(f); };
+  $('#imgIn').onchange = async (e) => { const f = [...e.target.files]; e.target.value = ''; await importFiles(f); };
+  $('#fileIn').onchange = async (e) => { const f = [...e.target.files]; e.target.value = ''; await importFiles(f); };
+  $$('#mediaTabs button').forEach(b => b.onclick = () => { mediaFilter = b.dataset.f; renderMedia(); });
+  $('#tMute').onclick = toggleMute;
   $('#audioIn').onchange = async (e) => { for (const f of e.target.files) await addMedia(f); e.target.value = ''; };
   const pm = $('#p-media');
-  pm.addEventListener('dragover', e => { e.preventDefault(); }); pm.addEventListener('drop', async e => { e.preventDefault(); for (const f of e.dataTransfer.files) await addMedia(f); });
+  pm.addEventListener('dragover', e => { e.preventDefault(); }); pm.addEventListener('drop', async e => { e.preventDefault(); await importFiles(e.dataTransfer.files); });
   window.addEventListener('dragover', e => e.preventDefault()); window.addEventListener('drop', e => e.preventDefault());
   BG_SOURCES.forEach(([a, b]) => $('#bgGrid').append(h('div', { class: 'tile', style: `background:linear-gradient(135deg,${a},${b});min-height:40px`, title: '배경 추가', onclick: () => addBackground(a, b) })));
   $('#btnAddText').onclick = () => addText();

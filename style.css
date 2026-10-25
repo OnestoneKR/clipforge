@@ -190,3 +190,12 @@ input,textarea{-webkit-user-select:text;user-select:text}
 }
 
 #tKnife.on{background:#ff5d6c;color:#fff;border-color:#ff5d6c;font-weight:700}
+
+.two{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:4px 0}
+.two .primary{padding:12px 6px}
+.mtabs{display:flex;gap:4px;margin:10px 0 2px}
+.mtabs button{flex:1;padding:6px 0;border-radius:16px;font-size:12px}
+.mtabs button.on{background:var(--acc);color:#04201b;border-color:var(--acc);font-weight:700}
+.dlg{position:fixed;inset:0;background:#000b;z-index:70;display:flex;align-items:center;justify-content:center;padding:16px}
+.dlg[hidden]{display:none}
+.dlg .box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px;width:420px;max-width:100%;max-height:90vh;overflow:auto}
