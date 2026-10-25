@@ -137,7 +137,10 @@ function getEl(c) {
     const el = document.createElement(m.type === 'audio' ? 'audio' : 'video');
     el.src = m.url; el.preload = 'auto'; el.playsInline = true; el.setAttribute('playsinline', ''); el.setAttribute('webkit-playsinline', '');
     if (m.abuf) el.muted = true;
-    if (m.type === 'video') vpool.append(el);
+    if (m.type === 'video') {
+      vpool.append(el); const cid = c.id;
+      el.addEventListener('seeked', () => { const cc = findClip(cid), mm = cc && media.get(cc.mediaId); if (cc && mm && mm.w && el.readyState >= 2) snapFrame(cc, el, mm, true); });
+    }
     o = { el, gain: null }; els.set(c.id, o);
   }
   if (m.abuf) { if (!o.el.muted) o.el.muted = true; }
@@ -199,11 +202,16 @@ function syncMedia() {
     if (el.playbackRate !== rate) el.playbackRate = rate;
     if (near) { if (!el.paused) el.pause(); if (Math.abs(el.currentTime - c.in) > 0.05 && !el.seeking) el.currentTime = c.in; continue; }
     if (playing) {
-      if (rate > 4) {   // 4배 초과는 재생 대신 프레임마다 위치를 옮겨 보여준다 (모바일에서도 안정적)
+      if (o.seekMode) {   // 기기가 고배속 재생을 못 따라갈 때: 재생 대신 위치를 계속 옮긴다 (완료된 프레임은 그때그때 화면에 반영)
         if (!el.paused) el.pause();
-        if (!el.seeking && Math.abs(el.currentTime - target) > 0.03) el.currentTime = target;
+        if (!el.seeking && Math.abs(el.currentTime - target) > 0.03) { if (el.fastSeek) el.fastSeek(target); else el.currentTime = target; }   // Safari(아이폰) 는 fastSeek 로 더 빠르게
       } else {
-        if (Math.abs(el.currentTime - target) > 0.3 && !el.seeking) el.currentTime = target;
+        const tol = Math.max(0.3, 0.12 * rate);
+        if (Math.abs(el.currentTime - target) > tol && !el.seeking) {
+          el.currentTime = target; const nw = performance.now();
+          o.rs = (o.rs || []).filter(x => nw - x < 1800); o.rs.push(nw);
+          if (o.rs.length >= 3 && rate > 2) { o.seekMode = true; }   // 짧은 시간에 자꾸 따라잡아야 하면 전환
+        }
         if (el.paused) el.play().catch(() => { });
       }
     } else {
@@ -251,10 +259,10 @@ async function addMedia(file, { id, name, durOverride, persist = persistPref } =
   return m;
 }
 const frameCache = new Map();
-function snapFrame(c, src, m) {
+function snapFrame(c, src, m, force = false) {
   const now = performance.now(); let fc = frameCache.get(c.id);
   if (!fc) { fc = document.createElement('canvas'); fc._t = 0; fc._mt = 0; frameCache.set(c.id, fc); }
-  if (now - fc._t > (playing ? 700 : 150)) {
+  if (force || now - fc._t > (playing ? 700 : 150)) {
     const w = Math.min(480, m.w), hh = Math.max(1, Math.round(w * m.h / m.w)); if (fc.width !== w || fc.height !== hh) { fc.width = w; fc.height = hh; }
     try { fc.getContext('2d').drawImage(src, 0, 0, w, hh); fc._t = now; fc._mt = src.currentTime; } catch { }
   }
@@ -818,7 +826,8 @@ function drawFrame() {
 }
 
 // ───────────── 재생 루프 ─────────────
-function play() { if (!total()) return toast('타임라인이 비어 있습니다'); ensureAudio(); if (t >= total() - 0.02) t = 0; playing = true; lastNow = performance.now(); $('#bPlay').textContent = '⏸'; if (actx.state === 'running') scheduleAudio(); else actx.resume().then(() => { if (playing) scheduleAudio(); }); }
+function play() { if (!total()) return toast('타임라인이 비어 있습니다'); ensureAudio(); if (t >= total() - 0.02) t = 0; for (const o of els.values()) { o.seekMode = false; o.rs = []; }
+  playing = true; lastNow = performance.now(); $('#bPlay').textContent = '⏸'; if (actx.state === 'running') scheduleAudio(); else actx.resume().then(() => { if (playing) scheduleAudio(); }); }
 function pause() { playing = false; stopAudioNodes(); $('#bPlay').textContent = '▶'; pauseAllEls(); buildInspectorValuesIfKf(); }
 function seek(x) { t = clamp(x, 0, Math.max(total(), 0)); if (playing) scheduleAudio(); }
 function tick() {
