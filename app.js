@@ -24,6 +24,8 @@ function h(tag, props = {}, ...kids) {
 let toastTimer;
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2400); }
 
+window.addEventListener('error', (e) => { try { const t0 = $('#toast'); t0.textContent = '오류: ' + e.message + (e.lineno ? ` (줄 ${e.lineno})` : ''); t0.classList.add('show'); setTimeout(() => t0.classList.remove('show'), 6000); } catch { } });
+window.addEventListener('unhandledrejection', (e) => { try { const t0 = $('#toast'); t0.textContent = '오류: ' + (e.reason && e.reason.message || e.reason); t0.classList.add('show'); setTimeout(() => t0.classList.remove('show'), 6000); } catch { } });
 // ───────────── 상수 ─────────────
 const RATIOS = { '16:9': [16, 9], '9:16': [9, 16], '1:1': [1, 1], '4:3': [4, 3], '3:4': [3, 4], '21:9': [21, 9] };
 const DEF_FILTER = { brightness: 100, contrast: 100, saturate: 100, hue: 0, blur: 0, grayscale: 0, sepia: 0, invert: 0 };
@@ -1477,8 +1479,18 @@ function syncTopbar() { $('#pname').value = project.name; $('#ratio').value = pr
 function setSheet(v) { document.body.dataset.sheet = v || ''; setTimeout(fitStage, 50); }
 
 // ───────────── 이벤트 연결 ─────────────
+function initMobileBar() {
+  $$('#mbar button').forEach(b => b.onclick = () => {
+    const p = b.dataset.p, cur = document.body.dataset.sheet;
+    if (p === 'insp') { setSheet(cur === 'insp' ? '' : 'insp'); }
+    else { $$('.ltab,.lpanel').forEach(x => x.classList.remove('on')); $(`.ltab[data-p="${p}"]`).classList.add('on'); $('#p-' + p).classList.add('on'); setSheet(cur === 'left' && b.classList.contains('on') ? '' : 'left'); }
+    $$('#mbar button').forEach(x => x.classList.toggle('on', x === b && document.body.dataset.sheet !== ''));
+  });
+  $$('.sheet-x').forEach(x => x.onclick = () => { setSheet(''); $$('#mbar button').forEach(b => b.classList.remove('on')); });
+}
 function init() {
-  initPanels();
+  try { initMobileBar(); } catch (e) { console.error(e); }
+  try { initPanels(); } catch (e) { console.error(e); toast('일부 기능 초기화 실패: ' + e.message); }
   $('#bPlay').onclick = () => playing ? pause() : play();
   $('#bStart').onclick = () => { pause(); seek(0); }; $('#bEnd').onclick = () => { pause(); seek(total()); };
   $('#bPrev').onclick = () => { pause(); seek(t - 1 / project.fps); }; $('#bNext').onclick = () => { pause(); seek(t + 1 / project.fps); };
@@ -1497,13 +1509,6 @@ function init() {
   $('#tSplit').onclick = () => splitClip(); $('#tDel').onclick = () => deleteClip(); $('#tRipple').onclick = () => deleteClip(true); $('#tDup').onclick = dupClip; $('#tFreeze').onclick = freezeFrame; $('#tMark').onclick = addMarker;
   $('#tKnife').onclick = () => toggleKnife(); $('#btnClean').onclick = cleanUnused;
   document.addEventListener('pointerdown', (e) => { delTarget = e.target.closest('#mediaGrid') ? 'media' : 'clip'; }, true);
-  $$('#mbar button').forEach(b => b.onclick = () => {
-    const p = b.dataset.p, cur = document.body.dataset.sheet;
-    if (p === 'insp') { setSheet(cur === 'insp' ? '' : 'insp'); }
-    else { $$('.ltab,.lpanel').forEach(x => x.classList.remove('on')); $(`.ltab[data-p="${p}"]`).classList.add('on'); $('#p-' + p).classList.add('on'); setSheet(cur === 'left' && b.classList.contains('on') ? '' : 'left'); }
-    $$('#mbar button').forEach(x => x.classList.toggle('on', x === b && document.body.dataset.sheet !== ''));
-  });
-  $$('.sheet-x').forEach(x => x.onclick = () => { setSheet(''); $$('#mbar button').forEach(b => b.classList.remove('on')); });
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => { });
   $('#tAddV').onclick = () => addTrack('video'); $('#tAddA').onclick = () => addTrack('audio');
   $('#zoom').oninput = (e) => { pps = +e.target.value; renderTimeline(); };
