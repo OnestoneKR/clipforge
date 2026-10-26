@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon" href="icon-180.png">
 <title>ClipForge 영상 편집기</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Do+Hyeon&family=Jua&family=Noto+Sans+KR:wght@400;700&display=swap">
-<link rel="stylesheet" href="style.css?v=10">
+<link rel="stylesheet" href="style.css?v=11">
 </head>
 <body>
 <header id="top">
@@ -144,6 +144,8 @@
     <button id="tFreeze" title="현재 프레임 정지 화면 삽입">❄ 프레임 정지</button>
     <button id="tMark" title="마커 (M)">⚑ 마커</button>
     <label class="sm"><input type="checkbox" id="snap" checked> 자석</label>
+    <label class="sm" title="자르거나 지울 때 생기는 빈 공간을 뒤 클립을 당겨 자동으로 붙임"><input type="checkbox" id="autoClose" checked> 공백 자동 붙이기</label>
+    <button id="tGaps" title="선택한 클립의 트랙에서 빈 공간을 모두 붙이기">⇆ 공백 붙이기</button>
     <span class="sp"></span>
     <button id="tAddV">+ 비디오 트랙</button>
     <button id="tAddA">+ 오디오 트랙</button>
@@ -185,6 +187,6 @@
 <input type="file" id="audioIn" multiple accept="audio/*" hidden>
 <input type="file" id="srtIn" accept=".srt,text/plain" hidden>
 <input type="file" id="projIn" accept=".json,application/json" hidden>
-<script src="app.js?v=10"></script>
+<script src="app.js?v=11"></script>
 </body>
 </html>

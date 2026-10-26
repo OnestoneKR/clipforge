@@ -473,22 +473,33 @@ function trimTarget() {
   if (trackOf(c).locked) { toast('잠긴 트랙입니다'); return null; }
   sel = c.id; return c;
 }
+const autoCloseOn = () => { const e = $('#autoClose'); return !!(e && e.checked); };
+function shiftAfter(tr, from, delta, except) { if (!delta) return; for (const o of tr.clips) if (o !== except && o.start >= from - 1e-6) o.start = Math.max(0, o.start + delta); }
 function trimFromHere() {            // 여기부터: 빨간 선 앞부분은 재생하지 않음
   const c = trimTarget(); if (!c) return;
   if (t <= c.start + 0.05 || t >= c.start + c.dur - 0.1) return toast('빨간 선을 클립 안쪽에 두고 눌러 주세요');
-  const d = t - c.start; if (isSrcClip(c)) c.in += d * c.speed;
-  c.start = t; c.dur -= d; shiftKf(c, -d); commit(); buildInspector(); toast(`${fmt(isSrcClip(c) ? c.in : t)} 부터 재생`);
+  const tr = trackOf(c), oldEnd = c.start + c.dur, d = t - c.start; if (isSrcClip(c)) c.in += d * c.speed;
+  c.dur -= d; shiftKf(c, -d);
+  if (autoCloseOn()) shiftAfter(tr, oldEnd, -d, c); else c.start = t;
+  commit(); buildInspector(); toast(`${fmt(isSrcClip(c) ? c.in : t)} 부터 재생` + (autoCloseOn() ? ' · 공백 없이 붙였습니다' : ''));
 }
 function trimToHere() {              // 여기까지: 빨간 선 뒷부분은 재생하지 않음
   const c = trimTarget(); if (!c) return;
   if (t <= c.start + 0.1 || t >= c.start + c.dur - 0.05) return toast('빨간 선을 클립 안쪽에 두고 눌러 주세요');
-  c.dur = t - c.start; commit(); buildInspector(); toast(`${fmt(t)} 까지만 재생`);
+  const tr = trackOf(c), oldEnd = c.start + c.dur; c.dur = t - c.start;
+  if (autoCloseOn()) shiftAfter(tr, oldEnd, c.start + c.dur - oldEnd, c);
+  commit(); buildInspector(); toast(`${fmt(t)} 까지만 재생` + (autoCloseOn() ? ' · 공백 없이 붙였습니다' : ''));
 }
 function trimToStart() {             // 처음부터: 잘라 둔 앞부분을 원래대로
   const c = trimTarget(); if (!c) return;
   if (!isSrcClip(c)) return toast('이 클립은 원본 구간이 없습니다');
   if (c.in < 0.01) return toast('이미 처음부터 재생됩니다');
-  const tr = trackOf(c), prevEnd = tr.clips.filter(x => x !== c && x.start + x.dur <= c.start + 1e-6).reduce((m, x) => Math.max(m, x.start + x.dur), 0);
+  const tr = trackOf(c);
+  if (autoCloseOn()) {   // 시작 위치는 그대로, 늘어난 만큼 뒤 클립을 민다
+    const back = c.in / c.speed, oldEnd = c.start + c.dur; c.in = 0; c.dur += back; shiftAfter(tr, oldEnd, back, c); shiftKf(c, back);
+    commit(); buildInspector(); return toast('처음부터 재생 · 뒤 클립을 뒤로 밀었습니다');
+  }
+  const prevEnd = tr.clips.filter(x => x !== c && x.start + x.dur <= c.start + 1e-6).reduce((m, x) => Math.max(m, x.start + x.dur), 0);
   const ns = Math.max(prevEnd, c.start - c.in / c.speed), back = c.start - ns;
   if (back < 0.01) return toast('앞 클립에 막혀 더 되돌릴 수 없습니다');
   c.in = Math.max(0, c.in - back * c.speed); if (c.in < 0.01) c.in = 0;
@@ -499,19 +510,31 @@ function trimToEnd() {               // 끝까지: 잘라 둔 뒷부분을 원�
   const c = trimTarget(); if (!c) return;
   if (!isSrcClip(c)) return toast('이 클립은 원본 구간이 없습니다');
   const m = media.get(c.mediaId); if (!m) return;
-  const tr = trackOf(c), next = tr.clips.filter(x => x !== c && x.start >= c.start + c.dur - 1e-6).reduce((mn, x) => Math.min(mn, x.start), Infinity);
-  const full = (m.dur - c.in) / c.speed, nd = Math.min(full, next - c.start);
+  const tr = trackOf(c), full = (m.dur - c.in) / c.speed;
+  if (autoCloseOn()) {
+    const grow = full - c.dur; if (grow <= 0.01) return toast('이미 끝까지 재생됩니다');
+    const oldEnd = c.start + c.dur; c.dur = full; shiftAfter(tr, oldEnd, grow, c); commit(); buildInspector(); return toast('끝까지 재생 · 뒤 클립을 뒤로 밀었습니다');
+  }
+  const next = tr.clips.filter(x => x !== c && x.start >= c.start + c.dur - 1e-6).reduce((mn, x) => Math.min(mn, x.start), Infinity), nd = Math.min(full, next - c.start);
   if (nd <= c.dur + 0.01) return toast(full <= c.dur + 0.01 ? '이미 끝까지 재생됩니다' : '뒤 클립에 막혀 더 늘릴 수 없습니다');
   c.dur = nd; commit(); buildInspector(); toast(nd >= full - 0.01 ? '끝까지 재생' : '뒤 클립까지만 복원했습니다 (일부)');
 }
+function closeAllGaps() {            // 선택한 클립이 있는 트랙(없으면 메인 비디오 트랙)의 빈 공간을 모두 붙인다
+  const c = selClip(), tr = c ? trackOf(c) : [...project.tracks].reverse().find(x => x.kind === 'video' && x.clips.length);
+  if (!tr || !tr.clips.length) return toast('붙일 클립이 없습니다');
+  const list = tr.clips.slice().sort((a, b) => a.start - b.start); let end = list[0].start, n = 0;
+  for (const o of list) { if (o.start > end + 0.005) { o.start = end; n++; } end = o.start + o.dur; }
+  if (!n) return toast('붙일 빈 공간이 없습니다'); commit(); toast(`빈 공간 ${n}곳을 붙였습니다`);
+}
 function deleteClip(ripple = false) {
   if (multiMode && multi.size) {
-    const n = multi.size; for (const id of [...multi]) { const c = findClip(id); if (!c) continue; const tr = trackOf(c); tr.clips = tr.clips.filter(x => x !== c); }
+    const n = multi.size, list = [...multi].map(findClip).filter(Boolean).sort((a, b) => b.start - a.start);
+    for (const c of list) { const tr = trackOf(c); tr.clips = tr.clips.filter(x => x !== c); if (ripple || autoCloseOn()) shiftAfter(tr, c.start + c.dur, -c.dur, null); }
     multi.clear(); sel = null; pruneEls(); commit(); buildInspector(); return toast(`${n}개 삭제`);
   }
   const c = selClip(); if (!c) return;
   const tr = trackOf(c); tr.clips = tr.clips.filter(x => x !== c);
-  if (ripple) for (const o of tr.clips) if (o.start >= c.start) o.start = Math.max(0, o.start - c.dur);
+  if (ripple || autoCloseOn()) shiftAfter(tr, c.start + c.dur, -c.dur, null);
   sel = null; pruneEls(); commit(); buildInspector();
 }
 function dupClip() {
@@ -998,7 +1021,9 @@ document.addEventListener('pointermove', (e) => {
 });
 document.addEventListener('pointerup', () => {
   if (!drag) return;
-  if (drag.mode === 'scrub') buildInspectorValuesIfKf(); else if (drag.moved) { drag.tr.clips.sort((a, b) => a.start - b.start); drag.lastTr.clips.sort((a, b) => a.start - b.start); commit(); }
+  if (drag.mode === 'scrub') buildInspectorValuesIfKf(); else if (drag.moved) {
+    if (autoCloseOn() && (drag.mode === 'trimL' || drag.mode === 'trimR')) { const c = drag.c, o = drag.o, delta = c.dur - o.dur; if (drag.mode === 'trimL') c.start = o.start; shiftAfter(drag.tr, o.start + o.dur, delta, c); }
+    drag.tr.clips.sort((a, b) => a.start - b.start); drag.lastTr.clips.sort((a, b) => a.start - b.start); commit(); }
   drag = null;
 });
 document.addEventListener('pointercancel', () => { if (drag && drag.moved) { drag.lastTr.clips.sort((a, b) => a.start - b.start); commit(); } drag = null; });
@@ -1662,7 +1687,8 @@ function init() {
   $('#projIn').onchange = async (e) => { const f = e.target.files[0]; if (f) { try { loadProject(JSON.parse(await f.text())); } catch { toast('프로젝트 파일이 올바르지 않습니다'); } } e.target.value = ''; };
   $('#btnNew').onclick = () => { if (confirm('새 프로젝트를 만들까요? (현재 편집 내용은 자동 저장본에서만 복구 가능)')) { project = newProject(); sel = null; t = 0; hist = []; hi = -1; pushHist(); syncTopbar(); resizeCanvas(); pruneEls(); refresh(); autosave(); } };
   $('#tSplit').onclick = () => splitClip(); $('#tDel').onclick = () => deleteClip(); $('#tRipple').onclick = () => deleteClip(true); $('#tDup').onclick = dupClip; $('#tFreeze').onclick = freezeFrame; $('#tMark').onclick = addMarker;
-  $('#btnClean').onclick = cleanUnused; $('#tMulti').onclick = () => setMulti(!multiMode); $('#tAll').onclick = selectAllClips;
+  $('#btnClean').onclick = cleanUnused; $('#tGaps').onclick = closeAllGaps;
+  { const ac = $('#autoClose'); try { const v = localStorage.getItem('clipforge:autoClose'); if (v !== null) ac.checked = v === '1'; } catch { } ac.onchange = () => { try { localStorage.setItem('clipforge:autoClose', ac.checked ? '1' : '0'); } catch { } }; } $('#tMulti').onclick = () => setMulti(!multiMode); $('#tAll').onclick = selectAllClips;
   $('#tFromStart').onclick = trimToStart; $('#tFromHere').onclick = trimFromHere; $('#tToHere').onclick = trimToHere; $('#tToEnd').onclick = trimToEnd;
   document.addEventListener('pointerdown', (e) => { delTarget = e.target.closest('#mediaGrid') ? 'media' : 'clip'; }, true);
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => { });
